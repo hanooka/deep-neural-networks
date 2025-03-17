@@ -86,20 +86,4 @@ def my_broadcast_tensors(a: torch.Tensor, b: torch.Tensor) -> Tuple[torch.Tensor
 
 
 if __name__ == '__main__':
-    # a = torch.arange(27).reshape(3, 1, 3, 3)
-    # b = torch.arange(18).reshape(3, 3, 1, 2)
-    a = torch.randn((1, 1, 2))
-    b = torch.randn((2, 1, 1))
-
-    a, b = my_broadcast_tensors(a, b)
-    print(a)
-    print(b)
-    print(a.shape)
-    print(b.shape)
-
-    c, d = torch.broadcast_tensors(a, b)
-    print(c)
-    print(d)
-
-    print(torch.equal(a, c))
-    print(torch.equal(b, d))
+    pass
