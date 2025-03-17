@@ -55,5 +55,9 @@ def main():
     a = torch.tensor([3.5])
     a, a.item(), float(a), int(a)
 
+
+    # torch.Tensor.expand_as()
+
+
 if __name__ == '__main__':
     main()
