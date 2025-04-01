@@ -1,4 +1,4 @@
-from typing import Iterable
+from typing import Iterable, Union
 
 import matplotlib.pyplot as plt
 import torch
@@ -36,6 +36,8 @@ def my_sampler(size: int, dist: Iterable[float], requires_grad: bool = False):
     result_tensor = torch.searchsorted(dist_cumsum, uni_randoms, out_int32=True)
 
     return result_tensor
+
+
 
 
 def test1():
