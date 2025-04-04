@@ -38,8 +38,6 @@ def my_sampler(size: int, dist: Iterable[float], requires_grad: bool = False):
     return result_tensor
 
 
-
-
 def test1():
     dist = [0.7, 0.2, 0.1]
     result_tensor = my_sampler(20, dist)

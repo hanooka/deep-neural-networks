@@ -26,11 +26,11 @@ class MyScalar:
 def power(x: MyScalar, var: Union[int, float]) -> MyScalar:
     def pow_der():
         if var == 0:
-            return x.val
+            return 0.
         # power derivative
-        return torch.pow(var * x.val, torch.tensor(var - 1)).item()
+        return var * torch.pow(x.val, torch.tensor(var - 1)).item()
 
-    # calculating MyScalar 3 values...
+    # calculating MyScalar 2 values...
     val = torch.pow(x.val, torch.tensor(var)).item()
     im_derivative = pow_der()
 
@@ -51,14 +51,14 @@ def log(x: MyScalar) -> MyScalar:
 
 
 def sin(x: MyScalar):
-    val = torch.sin(torch.tensor(x)).item()
-    im_derivative = torch.cos(torch.tensor(x)).item()
+    val = torch.sin(torch.tensor(x.val)).item()
+    im_derivative = torch.cos(torch.tensor(x.val)).item()
     return MyScalar(val, im_derivative, x)
 
 
 def cos(x: MyScalar):
-    val = torch.cos(torch.tensor(x)).item()
-    im_derivative = -torch.sin(torch.tensor(x)).item()
+    val = torch.cos(torch.tensor(x.val)).item()
+    im_derivative = -torch.sin(torch.tensor(x.val)).item()
     return MyScalar(val, im_derivative, x)
 
 
@@ -76,7 +76,7 @@ def get_gradient(x: MyScalar) -> dict:
     if not x:
         return {}
 
-    result = {0: 1}
+    result = {0: 1.}
 
     # applying chain rule by cum_mult the derivatives
     i = 1
@@ -92,8 +92,19 @@ def get_gradient(x: MyScalar) -> dict:
 
 
 if __name__ == '__main__':
-    a = MyScalar(2)
-    b = power(a, 2)
+    a = MyScalar(2.)
+    b = power(a, 2.)
     c = exp(b)
-    print(c)
     d = get_gradient(c)
+    print(d)
+
+    ta = torch.tensor(2.0, requires_grad=True)
+    tb = ta ** 2.
+    tb.retain_grad()
+    tc = torch.exp(tb)
+    tb.retain_grad()
+    tc.backward()
+
+    print(f"a: {ta.item()}, gradient: {ta.grad.item()}")
+    print(f"b: {tb.item()}, gradient: {tb.grad.item()}")
+
