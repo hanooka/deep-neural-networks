@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
-
 import torch
 from typing import Union
 
@@ -46,30 +44,31 @@ def exp(x: MyScalar) -> MyScalar:
 def log(x: MyScalar) -> MyScalar:
     # the natural log (log_base_e)
     val = torch.log(torch.tensor(x.val)).item()
-    im_derivative = 1. / x.val
+    # To avoid division by 0 (test suite also caught this)
+    im_derivative = 1. / max(x.val, 1e-16)
     return MyScalar(val, im_derivative, x)
 
 
-def sin(x: MyScalar):
+def sin(x: MyScalar) -> MyScalar:
     val = torch.sin(torch.tensor(x.val)).item()
     im_derivative = torch.cos(torch.tensor(x.val)).item()
     return MyScalar(val, im_derivative, x)
 
 
-def cos(x: MyScalar):
+def cos(x: MyScalar) -> MyScalar:
     val = torch.cos(torch.tensor(x.val)).item()
-    im_derivative = -torch.sin(torch.tensor(x.val)).item()
+    im_derivative = -1 * torch.sin(torch.tensor(x.val)).item()
     return MyScalar(val, im_derivative, x)
 
 
-def mult(x: MyScalar, var: Union[int, float]):
+def mult(x: MyScalar, var: Union[int, float]) -> MyScalar:
     val = x.val * var
     return MyScalar(val, var, x)
 
 
-def add(x: MyScalar, var: Union[int, float]):
+def add(x: MyScalar, var: Union[int, float]) -> MyScalar:
     val = x.val + var
-    return (val, 1, x)
+    return MyScalar(val, 1, x)
 
 
 def get_gradient(x: MyScalar) -> dict:
@@ -107,4 +106,3 @@ if __name__ == '__main__':
 
     print(f"a: {ta.item()}, gradient: {ta.grad.item()}")
     print(f"b: {tb.item()}, gradient: {tb.grad.item()}")
-
