@@ -34,6 +34,7 @@ def my_sampler(size: int, dist: Iterable[float], requires_grad: bool = False):
 
     # We will also vectorize the operation instead running in a for loop
     result_tensor = torch.searchsorted(dist_cumsum, uni_randoms, out_int32=True)
+    result_tensor.requires_grad = requires_grad
 
     return result_tensor
 

@@ -91,9 +91,13 @@ def get_gradient(x: MyScalar) -> dict:
     return result
 
 
+# TODO: Beautify and add TESTS.
+
 if __name__ == '__main__':
     a = MyScalar(2)
     b = power(a, 2)
     c = exp(b)
-    print(c)
-    d = get_gradient(c)
+    d = power(c, 2)
+    print(d)
+    e = get_gradient(d)
+    print(e)
