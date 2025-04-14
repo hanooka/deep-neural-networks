@@ -2,25 +2,70 @@ import os
 import pandas as pd
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch import nn
+from sklearn.model_selection import train_test_split
+from torch.utils.data import Dataset, DataLoader
 
+RANDOM_STATE = 1337
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 data_path = os.path.abspath(os.path.join(__file__, '../..', 'data'))
 diabetes_path = os.path.join(data_path, 'diabetes.csv')
 
 
+class ANeuralNetwork(nn.Module):
+    def __init__(self, task, input_dim, output_dim):
+        super().__init__()
+        task = task.lower()
+        _tasks = {'classification', 'regression'}
+        assert task in _tasks, f"task: {task} should be either {_tasks}"
+        self.output_dim = output_dim
+        if task == 'regression':
+            self.output_dim = 1
+        self.backbone = nn.Sequential(
+            nn.Linear(input_dim, 32),
+            nn.ReLU(),
+            nn.Dropout(0.35),
+            nn.Linear(32, 16),
+            nn.ReLU(),
+            nn.Dropout(0.35),
+            nn.Linear(16, 16),
+            nn.ReLU(),
+            nn.Dropout(0.35),
+            nn.Linear(16, 16),
+            nn.ReLU(),
+        )
+        if task == 'regression':
+            self.out = nn.Linear(16, 1)
+        elif task == 'classification':
+
+            self.out = nn.Sequential(
+                nn.Linear(16, self.output_dim),
+                nn.Softmax(dim=1)
+            )
+
+    def forward(self, x):
+        x = self.backbone(x)
+        pred = self.out(x)
+        return pred
+
+
 class DiabetesTabularDataset(Dataset):
-    def __init__(self, df_path, n_cuts):
-        self.data = preprocess_df(df_path, n_cuts)
+    def __init__(self, diab_df):
+        self.orig_columns = diab_df.columns.values
+        self.x = torch.tensor(diab_df.drop(labels=['Y', 'Class'], axis=1).values, dtype=torch.float32, device=DEVICE)
+        self.y_reg = torch.tensor(diab_df['Y'].values, dtype=torch.int16, device=DEVICE)
+        self.y_cat = torch.tensor(diab_df['Class'].values, dtype=torch.int8, device=DEVICE)
 
     def __len__(self):
-        return len(self.data)
+        return self.x.shape[0]
 
-    def __getitem__(self, idx):
-        return self.data.iloc[idx]
+    def __getitem__(self, idx) -> tuple:
+        """ returns, x, y_categorical, y_regression """
+        return self.x[idx], self.y_cat[idx], self.y_reg[idx]
 
 
-def preprocess_df(df_path, n_cuts: int=10):
+def preprocess_df(df_path, n_cuts: int = 10):
     # reading df, tab seperated
     diabetes_df = pd.read_csv(df_path, sep='\t')
 
@@ -38,12 +83,24 @@ def preprocess_df(df_path, n_cuts: int=10):
 
 def main():
     diabetes_df = preprocess_df(diabetes_path, 10)
-    dataset = DiabetesTabularDataset(diabetes_path, 100)
-    for d in dataset:
-        print(d)
+    train_diab_df, test_diab_df = train_test_split(
+        diabetes_df, test_size=0.2, random_state=RANDOM_STATE)
+
+    diabetes_dataset = DiabetesTabularDataset(train_diab_df)
+    diabetes_dataloder = DataLoader(diabetes_dataset, batch_size=10, shuffle=True)
+
+    x, y_reg, y_cat = next(iter(diabetes_dataloder))
+    # test all y_cat values are between 0 and 9 included
+
+    print(x, y_reg, y_cat)
+    print(len(diabetes_dataloder))
+
+    model = ANeuralNetwork(task='classification', input_dim=10, output_dim=10)
+    model.to(DEVICE)
+    print(model)
+    y_pred = model(x)
+    print(y_pred)
 
 
 if __name__ == '__main__':
     main()
-
-
