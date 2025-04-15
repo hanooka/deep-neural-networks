@@ -51,9 +51,22 @@ class ANeuralNetwork(nn.Module):
 
 
 class DiabetesTabularDataset(Dataset):
-    def __init__(self, diab_df):
+    def __init__(self, diab_df, exclude_Y=False):
+        """ Implementing a custom case where we can put Y in and out of x.
+        exclude_Y = True ==> Y will not be in x ("known" variables)
+        We also return 2 kind of labels:
+            One is for classification (Class)
+            Other is for regression (Y)
+        We can think about rescaling all variables.
+        """
         self.orig_columns = diab_df.columns.values
-        self.x = torch.tensor(diab_df.drop(labels=['Y', 'Class'], axis=1).values, dtype=torch.float32, device=DEVICE)
+        self.exclude_Y = exclude_Y
+        drops = ['Class']
+
+        if exclude_Y:
+            drops = ['Y', 'Class']
+
+        self.x = torch.tensor(diab_df.drop(labels=drops, axis=1).values, dtype=torch.float32, device=DEVICE)
         self.y_reg = torch.tensor(diab_df['Y'].values, dtype=torch.int16, device=DEVICE)
         self.y_cat = torch.tensor(diab_df['Class'].values, dtype=torch.int8, device=DEVICE)
 
@@ -80,6 +93,47 @@ def preprocess_df(df_path, n_cuts: int = 10):
     diabetes_df = pd.concat([diabetes_df, y_categorical], axis=1)
     return diabetes_df
 
+
+
+def questions_6_7():
+    """ Question 6 and 7, we create a Dataloader.
+    We create batches of size 10.
+    We print one batch.
+    """
+    diabetes_df = preprocess_df(diabetes_path, 10)
+    train_diab_df, test_diab_df = train_test_split(
+        diabetes_df, test_size=0.2, random_state=RANDOM_STATE)
+
+    diabetes_dataset = DiabetesTabularDataset(train_diab_df)
+    diabetes_dataloder = DataLoader(diabetes_dataset, batch_size=10, shuffle=True)
+
+    x, y_reg, y_cat = next(iter(diabetes_dataloder))
+    # test all y_cat values are between 0 and 9 included
+
+    print(x, y_reg, y_cat)
+    print(len(diabetes_dataloder))
+
+
+def training_loop(model, train_df, test_df):
+    loss_fn = nn.CrossEntropyLoss()
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=0.05)
+
+
+def question_8(n_cuts=10):
+    """ We create our x using Y, and pred is Class `exclude_Y=False`
+    Also notice that n_cuts determine amount of classes (and our output dim) """
+    diabetes_df = preprocess_df(diabetes_path, n_cuts)
+    train_diab_df, test_diab_df = train_test_split(
+        diabetes_df, test_size=0.2, random_state=RANDOM_STATE)
+
+    diabetes_dataset = DiabetesTabularDataset(train_diab_df, exclude_Y=False)
+    diabetes_dataloder = DataLoader(diabetes_dataset, batch_size=10, shuffle=True)
+
+    x, y_reg, y_cat = next(iter(diabetes_dataloder))
+
+    model = ANeuralNetwork(task='classification', input_dim=x.shape[0], output_dim=n_cuts)
+    model.to(DEVICE)
+    model = training_loop(model, train_diab_df, test_diab_df)
 
 def main():
     diabetes_df = preprocess_df(diabetes_path, 10)
