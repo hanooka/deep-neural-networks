@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import torch
 from torch import nn
+from torcheval.metrics import MulticlassAccuracy
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 
@@ -132,9 +133,10 @@ def questions_6_7():
 
 
 def validation_loop(model, val_loader, loss_fn, task):
-    model.eval()
+    """ """
     val_loss = 0.
-    correct = 0
+    metric = MulticlassAccuracy(device=DEVICE)
+    model.eval()
     task = task.lower()
     assert task in AVB_TASKS, f"{task} should be in {AVB_TASKS}"
 
@@ -143,12 +145,13 @@ def validation_loop(model, val_loader, loss_fn, task):
             preds = model(x)
             y_true = y_cls if task == 'classification' else y_reg
             loss = loss_fn(preds, y_true)
+            metric.update(preds, y_true)
             val_loss += loss.item()
 
             # TODO Calculate accuracy
 
     avg_val_loss = val_loss / len(val_loader)
-    print(f"Val loss: {avg_val_loss:.4f}")
+    print(f"Val loss: {avg_val_loss:.4f}, Val acc: {metric.compute()*100:.2f}")
     return avg_val_loss
 
 
@@ -160,6 +163,20 @@ def train_model(
         epochs: int = 10,
         lr: float = 3e-4,
         wd: float = 0.05):
+    """
+    Given train/validation set, train the model `epochs` epochs, and validates at each epoch over
+    the validation set.
+    Required metric is Accuracy.
+
+    :param model:
+    :param train_loader:
+    :param valid_loader:
+    :param task:
+    :param epochs:
+    :param lr:
+    :param wd:
+    :return:
+    """
     task = task.lower()
     assert task in AVB_TASKS, f"{task} should be in {AVB_TASKS}"
     loss_fn = loss_fn_map[task]
@@ -181,12 +198,15 @@ def train_model(
             if i % 10 == 0:  # Print every 10 batches
                 print(f"Epoch [{epoch + 1}/{epochs}], "
                       f"Step [{i}/{len(train_loader)}], "
-                      f"Loss: {loss.item():.4f}")
+                      f"Loss: {loss.item():.4f}", sep=',')
+                ###
+                ### TODO I was writing a custom print for regression VS classification. Need to rethink this
+                ### TODO Because it causes a overhead for me.
 
         avg_val_loss = validation_loop(model, valid_loader, loss_fn, task)
 
 
-def question_8(n_cuts=10, exclude_Y=False, task='classification', epochs=500):
+def question_8(n_cuts=10, exclude_Y=False, task='classification', epochs=100):
     """ We create our x using Y, and pred is Class `exclude_Y=False`
     Also notice that n_cuts determine amount of classes (and our output dim) """
     diabetes_df = preprocess_df(diabetes_path, n_cuts)
