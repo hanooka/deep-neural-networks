@@ -1,30 +1,36 @@
 import os
-from enum import Enum
-
-import pandas as pd
-import numpy as np
 import torch
+import pandas as pd
+
+from enum import Enum
 from torch import nn
-from torcheval.metrics import MulticlassAccuracy
+from torcheval.metrics import MulticlassAccuracy, R2Score
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 
 RANDOM_STATE = 1337
-AVB_TASKS = {'classification', 'regression'}
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-loss_fn_map = {
-    'classification': nn.CrossEntropyLoss(),
-    'regression': nn.MSELoss()
-}
-
-data_path = os.path.abspath(os.path.join(__file__, '../..', 'data'))
-diabetes_path = os.path.join(data_path, 'diabetes.csv')
 
 
 class Task(str, Enum):
     CLASSIFICATION = 'classification'
     REGRESSION = 'regression'
+
+
+loss_fn_map = {
+    Task.CLASSIFICATION: nn.CrossEntropyLoss(),
+    Task.REGRESSION: nn.MSELoss()
+}
+
+metric_map = {
+    Task.CLASSIFICATION: (MulticlassAccuracy, "Accuracy"),
+    Task.REGRESSION: (R2Score, "R2Score")
+}
+
+AVB_TASKS = {Task.CLASSIFICATION, Task.REGRESSION}
+
+data_path = os.path.abspath(os.path.join(__file__, '../..', 'data'))
+diabetes_path = os.path.join(data_path, 'diabetes.csv')
 
 
 class ANeuralNetwork(nn.Module):
@@ -36,20 +42,16 @@ class ANeuralNetwork(nn.Module):
         if task == Task.REGRESSION:
             self.output_dim = 1
         self.backbone = nn.Sequential(
-            nn.Linear(input_dim, 32),
+            nn.Linear(input_dim, 1024),
             nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(32, 16),
+            nn.Dropout(0.25),
+            nn.Linear(1024, 1024),
             nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(16, 16),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(16, 16),
+            nn.Dropout(0.25),
+            nn.Linear(1024, 1024),
             nn.ReLU(),
         )
-
-        self.out = nn.Linear(16, self.output_dim)
+        self.out = nn.Linear(1024, self.output_dim)
 
     def forward(self, x):
         x = self.backbone(x)
@@ -86,7 +88,7 @@ class DiabetesTabularDataset(Dataset):
             drops = ['Y', 'Class']
 
         self.x = torch.tensor(diab_df.drop(labels=drops, axis=1).values, dtype=torch.float32, device=DEVICE)
-        self.y_reg = torch.tensor(diab_df['Y'].values, dtype=torch.int16, device=DEVICE)
+        self.y_reg = torch.tensor(diab_df['Y'].values, dtype=torch.float32, device=DEVICE)
         self.y_cat = torch.tensor(diab_df['Class'].values, dtype=torch.int64, device=DEVICE)
 
     def __len__(self):
@@ -132,37 +134,34 @@ def questions_6_7():
     print(len(diabetes_dataloder))
 
 
-def validation_loop(model, val_loader, loss_fn, task):
+def validation_loop(model, val_loader, loss_fn, task) -> (float, float):
     """ """
     val_loss = 0.
-    metric = MulticlassAccuracy(device=DEVICE)
-    model.eval()
-    task = task.lower()
     assert task in AVB_TASKS, f"{task} should be in {AVB_TASKS}"
-
+    metric, metric_name = metric_map[task]
+    metric = metric()
+    model.eval()
     with torch.no_grad():
         for x, y_reg, y_cls in val_loader:
-            preds = model(x)
+            preds = model(x).squeeze()
             y_true = y_cls if task == 'classification' else y_reg
             loss = loss_fn(preds, y_true)
             metric.update(preds, y_true)
             val_loss += loss.item()
 
-            # TODO Calculate accuracy
-
     avg_val_loss = val_loss / len(val_loader)
-    print(f"Val loss: {avg_val_loss:.4f}, Val acc: {metric.compute()*100:.2f}")
-    return avg_val_loss
+    print(f"Val loss: {avg_val_loss:.4f}, Val {metric_name}: {metric.compute():.4f}")
+    return avg_val_loss, metric.compute()
 
 
 def train_model(
-        model,
+        model: nn.Module,
         train_loader: DataLoader,
         valid_loader: DataLoader,
-        task: str,
+        task: Task,
         epochs: int = 10,
-        lr: float = 3e-4,
-        wd: float = 0.05):
+        lr: float = 1e-4,
+        wd: float = 0.05) -> nn.Module:
     """
     Given train/validation set, train the model `epochs` epochs, and validates at each epoch over
     the validation set.
@@ -171,26 +170,30 @@ def train_model(
     :param model:
     :param train_loader:
     :param valid_loader:
-    :param task:
+    :param task: Task (currently 'classification' or 'regression')
     :param epochs:
-    :param lr:
-    :param wd:
-    :return:
+    :param lr: learning rate
+    :param wd: weight decay
+    :return: a model
     """
-    task = task.lower()
+
     assert task in AVB_TASKS, f"{task} should be in {AVB_TASKS}"
     loss_fn = loss_fn_map[task]
+    metric, metric_name = metric_map[task]
+    metric = metric()
 
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
     for epoch in range(epochs):
         running_loss = 0.
         model.train()
+        metric.reset()
         for i, (x, y_reg, y_cls) in enumerate(train_loader):
             opt.zero_grad()
-            preds = model(x)
-            y_true = y_cls if task == 'classification' else y_reg
+            preds = model(x).squeeze()
+            y_true = y_cls if task == Task.CLASSIFICATION else y_reg
             loss = loss_fn(preds, y_true)
+            metric.update(preds, y_true)
             loss.backward()
             opt.step()
 
@@ -198,15 +201,15 @@ def train_model(
             if i % 10 == 0:  # Print every 10 batches
                 print(f"Epoch [{epoch + 1}/{epochs}], "
                       f"Step [{i}/{len(train_loader)}], "
-                      f"Loss: {loss.item():.4f}", sep=',')
-                ###
-                ### TODO I was writing a custom print for regression VS classification. Need to rethink this
-                ### TODO Because it causes a overhead for me.
+                      f"Loss: {loss.item():.4f},",
+                      f"{metric_name}: {metric.compute():.4f}")
 
-        avg_val_loss = validation_loop(model, valid_loader, loss_fn, task)
+        avg_val_loss, metric_val = validation_loop(model, valid_loader, loss_fn, task)
+
+    return model
 
 
-def question_8(n_cuts=10, exclude_Y=False, task='classification', epochs=100):
+def general_solver(n_cuts=10, exclude_Y=False, task=Task.CLASSIFICATION, epochs=100):
     """ We create our x using Y, and pred is Class `exclude_Y=False`
     Also notice that n_cuts determine amount of classes (and our output dim) """
     diabetes_df = preprocess_df(diabetes_path, n_cuts)
@@ -224,31 +227,39 @@ def question_8(n_cuts=10, exclude_Y=False, task='classification', epochs=100):
 
     x, y_reg, y_cat = next(iter(diab_training_dl))
 
-    model = ANeuralNetwork(task='classification', input_dim=x.shape[1], output_dim=n_cuts)
+    model = ANeuralNetwork(task=task, input_dim=x.shape[1], output_dim=n_cuts)
     model.to(DEVICE)
+    print(model)
     model = train_model(model, diab_training_dl, diab_validation_dl, task=task, epochs=epochs)
 
 
+def question_8():
+    general_solver(n_cuts=10, exclude_Y=False, task=Task.CLASSIFICATION, epochs=500)
+    # Epoch [500/500], Step [30/36], Loss: 0.5692, Accuracy: 0.6314
+    # Val loss: 0.9871, Val Accuracy: 0.6314
+
+
+def question_9():
+    general_solver(n_cuts=10, exclude_Y=True, task=Task.CLASSIFICATION, epochs=500)
+    # Epoch [500/500], Step [30/36], Loss: 1.9232, Accuracy: 0.2884
+    # Val loss: 2.0823, Val Accuracy: 0.2360
+
+
+def question_12():
+    general_solver(n_cuts=100, exclude_Y=False, task=Task.CLASSIFICATION, epochs=500)
+    # Epoch [500/500], Step [30/36], Loss: 0.6346, Accuracy: 0.5664
+    # Val loss: 7.5515, Val Accuracy: 0.5663
+
+
+def question_13():
+    general_solver(n_cuts=100, exclude_Y=True, task=Task.CLASSIFICATION, epochs=500)
+    # Epoch [500/500], Step [30/36], Loss: 0.5034, Accuracy: 0.5698
+    # Val loss: 11.0239, Val Accuracy: 0.5696
+
+
 def main():
-    diabetes_df = preprocess_df(diabetes_path, 10)
-    train_diab_df, test_diab_df = train_test_split(
-        diabetes_df, test_size=0.2, random_state=RANDOM_STATE)
-
-    diabetes_dataset = DiabetesTabularDataset(train_diab_df)
-    diabetes_dataloder = DataLoader(diabetes_dataset, batch_size=10, shuffle=True)
-
-    x, y_reg, y_cat = next(iter(diabetes_dataloder))
-    # test all y_cat values are between 0 and 9 included
-
-    print(x, y_reg, y_cat)
-    print(len(diabetes_dataloder))
-
-    model = ANeuralNetwork(task='classification', input_dim=10, output_dim=10)
-    model.to(DEVICE)
-    print(model)
-    y_pred = model(x)
-    print(y_pred)
+    question_8()
 
 
 if __name__ == '__main__':
-    question_8()
+    main()
