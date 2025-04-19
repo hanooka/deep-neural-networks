@@ -23,8 +23,8 @@ loss_fn_map = {
 }
 
 metric_map = {
-    Task.CLASSIFICATION: (MulticlassAccuracy, "Accuracy"),
-    Task.REGRESSION: (R2Score, "R2Score")
+    Task.CLASSIFICATION: (MulticlassAccuracy, "acc"),
+    Task.REGRESSION: (R2Score, "r2")
 }
 
 AVB_TASKS = {Task.CLASSIFICATION, Task.REGRESSION}
@@ -150,7 +150,6 @@ def validation_loop(model, val_loader, loss_fn, task) -> (float, float):
             val_loss += loss.item()
 
     avg_val_loss = val_loss / len(val_loader)
-    print(f"Val loss: {avg_val_loss:.4f}, Val {metric_name}: {metric.compute():.4f}")
     return avg_val_loss, metric.compute()
 
 
@@ -185,6 +184,7 @@ def train_model(
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
     for epoch in range(epochs):
+        print(f"Epoch [{epoch + 1}/{epochs}]", end=', ')
         running_loss = 0.
         model.train()
         metric.reset()
@@ -196,26 +196,25 @@ def train_model(
             metric.update(preds, y_true)
             loss.backward()
             opt.step()
-
             running_loss += loss.item()
-            if i % 10 == 0:  # Print every 10 batches
-                print(f"Epoch [{epoch + 1}/{epochs}], "
-                      f"Step [{i}/{len(train_loader)}], "
-                      f"Loss: {loss.item():.4f},",
-                      f"{metric_name}: {metric.compute():.4f}")
 
+        #if i % 10 == 0:  # Print every 10 batches
+
+        # End of epoch. Run validation and print outcomes
         avg_val_loss, metric_val = validation_loop(model, valid_loader, loss_fn, task)
+        print(f"trn los: {running_loss / (epoch + 1):.4f},", f"trn {metric_name}: {metric.compute():.4f}", end=', ')
+        print(f"val loss: {avg_val_loss:.4f}, val {metric_name}: {metric_val:.4f}")
 
     return model
 
 
 def general_solver(n_cuts=10, exclude_Y=False, task=Task.CLASSIFICATION, epochs=100):
-    """ We create our x using Y, and pred is Class `exclude_Y=False`
-    Also notice that n_cuts determine amount of classes (and our output dim) """
+    """ TODO Fill this
+    notice that n_cuts determine amount of classes (and our output dim) """
     diabetes_df = preprocess_df(diabetes_path, n_cuts)
 
     # Stratification should be considered here.
-    # Weight balancing can be ignored because of how we created the labels.
+    # Weight balancing can be semi-ignored because of how we created the labels.
     train_diab_df, valid_diab_df = train_test_split(
         diabetes_df, test_size=0.2, random_state=RANDOM_STATE)
 
@@ -229,12 +228,11 @@ def general_solver(n_cuts=10, exclude_Y=False, task=Task.CLASSIFICATION, epochs=
 
     model = ANeuralNetwork(task=task, input_dim=x.shape[1], output_dim=n_cuts)
     model.to(DEVICE)
-    print(model)
     model = train_model(model, diab_training_dl, diab_validation_dl, task=task, epochs=epochs)
 
 
 def question_8():
-    general_solver(n_cuts=10, exclude_Y=False, task=Task.CLASSIFICATION, epochs=500)
+    general_solver(n_cuts=10, exclude_Y=False, task=Task.CLASSIFICATION, epochs=100)
     # Epoch [500/500], Step [30/36], Loss: 0.5692, Accuracy: 0.6314
     # Val loss: 0.9871, Val Accuracy: 0.6314
 
@@ -246,7 +244,7 @@ def question_9():
 
 
 def question_12():
-    general_solver(n_cuts=100, exclude_Y=False, task=Task.CLASSIFICATION, epochs=500)
+    general_solver(n_cuts=100, exclude_Y=False, task=Task.CLASSIFICATION, epochs=100)
     # Epoch [500/500], Step [30/36], Loss: 0.6346, Accuracy: 0.5664
     # Val loss: 7.5515, Val Accuracy: 0.5663
 
@@ -258,7 +256,7 @@ def question_13():
 
 
 def main():
-    question_8()
+    question_9()
 
 
 if __name__ == '__main__':
