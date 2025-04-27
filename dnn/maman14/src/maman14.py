@@ -6,7 +6,11 @@ from torch import nn
 
 
 def init_weights_pre_relu(input_dim, output_dim):
-    """ Since we're using RELU activation, we'll implement the `he` initialization. """
+    """ Since we're using RELU activation, we'll implement the `he` initialization.
+    I have ignored bias initialization problems, as we've got no "real training".
+    No consideration on imbalance etc.
+
+    """
     std = math.sqrt(2/input_dim)
     weights = torch.randn((input_dim, output_dim)) * std
     return weights
