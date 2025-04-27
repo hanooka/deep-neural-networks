@@ -1,10 +1,15 @@
+import math
 from collections import OrderedDict
 
 import torch
 from torch import nn
 
 
-def init_weights(input_dim, output_dim):
+def init_weights_pre_relu(input_dim, output_dim):
+    """ Since we're using RELU activation, we'll implement the `he` initialization. """
+    std = math.sqrt(2/input_dim)
+    weights = torch.randn((input_dim, output_dim)) * std
+    return weights
 
 class SplitLinear(nn.Module):
     def __init__(self, input_dim):
@@ -16,8 +21,12 @@ class SplitLinear(nn.Module):
             ("l1", nn.Linear(input_dim // 2, output_dim // 2)),
             ("a1", nn.ReLU())
         ]))
-
-        print(self.network.sl)
+        # Custom weights creation!
+        he_weights = init_weights_pre_relu(input_dim // 2, output_dim // 2)
+        he_weights.requires_grad = True
+        custom_weight = nn.Parameter(he_weights)
+        self.network.l1.weight = custom_weight
+        print(self.network.l1.weight)
 
     def forward(self, x: torch.Tensor):
         assert x.shape[1] % 2 == 0, f"x.shape[1]: {x.shape[1]} should be even."
@@ -29,6 +38,9 @@ class SplitLinear(nn.Module):
 if __name__ == '__main__':
     N = 2
     M = 4
+
+    scaled = init_weights_pre_relu(M//2, M//2)
+    print(scaled)
 
     model = SplitLinear(M)
     print(model)
