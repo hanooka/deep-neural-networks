@@ -2,6 +2,7 @@ import math
 from collections import OrderedDict
 
 import torch
+from keras.src.testing_infra.test_utils import device
 from torch import nn
 from torch.backends.mkl import verbose
 
@@ -63,9 +64,6 @@ def q1():
     print(f"Shapes equal: {x.shape == y.shape}")
 
 
-nn.Dropout
-
-
 class DropNorm(nn.Module):
     def __init__(self, drop_p=0.5):
         super().__init__()
@@ -73,7 +71,7 @@ class DropNorm(nn.Module):
         self.drop_p = drop_p
         self.eps = 1e-16
 
-    def dropout(self, x: torch.Tensor):
+    def fail_dropout(self, x: torch.Tensor):
         # Case not training or p = 0
         if not self.training or self.drop_p == 0.:
             return x
@@ -87,6 +85,25 @@ class DropNorm(nn.Module):
         # element wise multiplication ==> "masking"
         return x * mask
 
+    def correct_dropout(self, x: torch.Tensor):
+        # hard set of p to 0.5 like required.
+        p = 0.5
+        if not self.training:
+            return x
+        feature_shape = x.shape[1:]
+        ele_num = math.prod(feature_shape)
+        # bitwise check for `even` num
+        assert ele_num & 1 == 0
+        half_ele = ele_num // 2
+        # Creating tensor with half 1 and half 0
+        mask = torch.cat([torch.ones(half_ele, dtype=torch.float),
+                          torch.zeroes(half_ele, dtype=torch.float)])
+        # Generate random permutation (to order the 1s and 0s) <=> shuffle
+        perm = torch.randperm(ele_num, device=x.device)
+        # Shuffle the mask, reshape to original feature shape
+        mask = mask[perm].reshape(feature_shape).to(x.device)
+        return x * mask / p
+
     def normalize(self, x):
         if not self.training:
             return x
@@ -95,9 +112,13 @@ class DropNorm(nn.Module):
         # meaning every batch will have it's own mew, sig2, and eventually norm_x.
         dims = tuple(range(1, x.dim()))
         mew = torch.mean(x, dtype=torch.float32, dim=dims, keepdim=True)
+        # std^2 | known also as `variance`
         sig2 = torch.sum((x - mew) ** 2, dim=dims, keepdim=True) / math.prod(x.shape[1:])
         norm_x = (x - mew) / torch.sqrt(sig2 + self.eps)
         return norm_x
+
+    def dropout(self, x):
+        return self.correct_dropout(x)
 
     def forward(self, x):
         # TODO: implement gama and betas for the network
@@ -118,6 +139,7 @@ def norm_example():
 
     norm_x = (x - mew) / torch.sqrt(sig2 + eps)
     print(norm_x)
+
 
 def main():
     pass
