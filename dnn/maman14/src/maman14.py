@@ -1,10 +1,9 @@
 import math
-from collections import OrderedDict
-
 import torch
-from keras.src.testing_infra.test_utils import device
+
 from torch import nn
-from torch.backends.mkl import verbose
+from typing import Union
+from collections import OrderedDict
 
 
 def init_weights_pre_relu(input_dim, output_dim):
@@ -64,7 +63,7 @@ def q1():
     print(f"Shapes equal: {x.shape == y.shape}")
 
 
-class DropNorm(nn.Module):
+class DropNormV0(nn.Module):
     def __init__(self, drop_p=0.5):
         super().__init__()
         assert 0. <= drop_p <= 1., f"drop probability {drop_p} should be in between [0, 1]"
@@ -83,7 +82,7 @@ class DropNorm(nn.Module):
         # division: since we "activate" fewer neurons, we give them "more power"
         mask = mask / (1. - self.drop_p)
         # element wise multiplication ==> "masking"
-        return x * mask
+        return x * mask, mask
 
     def correct_dropout(self, x: torch.Tensor):
         # hard set of p to 0.5 like required.
@@ -102,7 +101,7 @@ class DropNorm(nn.Module):
         perm = torch.randperm(ele_num, device=x.device)
         # Shuffle the mask, reshape to original feature shape
         mask = mask[perm].reshape(feature_shape).to(x.device)
-        return x * mask / p
+        return x * mask / p, mask
 
     def normalize(self, x):
         if not self.training:
@@ -122,8 +121,63 @@ class DropNorm(nn.Module):
 
     def forward(self, x):
         # TODO: implement gama and betas for the network
+        # TODO: Distinguish between training/infer
         out1 = self.dropout(x)
         out2 = self.normalize(out1)
+        return out2
+
+
+class DropNorm(nn.Module):
+    def __init__(self, input_dim: Union[tuple, list, int]):
+        super().__init__()
+        self.eps = 1e-16
+        # We init params so that y_i = x_i, similarly to batch norm
+        self.gamma = nn.Parameter(torch.ones(input_dim))
+        self.beta = nn.Parameter(torch.zeros(input_dim))
+
+    def dropout(self, x: torch.Tensor):
+        # hard set of p to 0.5 like required.
+        p = 0.5
+        if not self.training:
+            return x
+        feature_shape = x.shape[1:]
+        ele_num = math.prod(feature_shape)
+        # bitwise check for `even` num
+        assert ele_num & 1 == 0
+        half_ele = ele_num // 2
+        # Creating tensor with half 1 and half 0
+        mask = torch.cat([torch.ones(half_ele, dtype=torch.float, device=x.device),
+                          torch.zeros(half_ele, dtype=torch.float, device=x.device)])
+        # Generate random permutation (to order the 1s and 0s) <=> shuffle
+        perm = torch.randperm(ele_num, device=x.device)
+        # Shuffle the mask, reshape to original feature shape
+        mask = mask[perm].reshape(feature_shape)
+        return x * mask / p, mask
+
+    def normalize(self, x):
+        if not self.training:
+            return x
+
+        # We want all dims EXCEPT the batch dim, to be included in the mean
+        # meaning every sample will have its own mew, sig2, and eventually norm_x.
+        dims = tuple(range(1, x.dim()))
+        mew = torch.mean(x, dtype=torch.float32, dim=dims, keepdim=True)
+        # std^2 | known also as `variance`
+        sig2 = torch.sum((x - mew) ** 2, dim=dims, keepdim=True) / math.prod(x.shape[1:])
+        norm_x = (x - mew) / torch.sqrt(sig2 + self.eps)
+        return norm_x
+
+    def forward(self, x):
+        """ When training, we use dropout -> normalization and we mult with mask as requested
+            (we must multiply again with the mask, as beta might not be 0, and we want 0s)
+        When not training, we only use normalize(x)*gamma + beta."""
+        if self.training:
+            out1, mask = self.dropout(x)
+            out2 = self.normalize(out1)
+            # We multiply at mask again because parameters that were zeroed in dropout should stay zeroed
+            out2 = (self.gamma * out2 + self.beta) * mask
+        else:
+            out2 = self.gamma * self.normalize(x) + self.beta
         return out2
 
 
