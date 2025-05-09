@@ -284,7 +284,8 @@ def train_model(
     return model
 
 
-def main():
+def run_mnist(model: nn.Module):
+    model = model.to(DEVICE)
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))  # mean and std from MNIST stats
@@ -295,11 +296,10 @@ def main():
     train_loader = DataLoader(train_data, batch_size=50, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=100)
 
-    model = MySpecialNetwork().to(DEVICE)
-
     loss_fn = nn.CrossEntropyLoss()
     train_model(model, train_loader, test_loader, loss_fn, verbose=2, verbose_batch=100)
 
 
 if __name__ == '__main__':
-    main()
+    run_mnist(BasicNetwork())
+    run_mnist(MySpecialNetwork())
