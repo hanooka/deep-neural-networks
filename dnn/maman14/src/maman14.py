@@ -56,8 +56,8 @@ class SplitLinear(nn.Module):
 
 
 def q1():
-    N = 2  # Batch size
-    M = 4  # Features (1d)
+    N = 1  # Batch size
+    M = 2  # Features (1d)
 
     model = SplitLinear(M, verbose=True)
     x = torch.rand((N, M))
