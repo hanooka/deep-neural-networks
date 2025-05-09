@@ -5,6 +5,13 @@ from torch import nn
 from typing import Union
 from collections import OrderedDict
 
+from torcheval import metrics
+from torchvision import transforms
+from torch.utils.data import DataLoader
+from torchvision import datasets
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def init_weights_pre_relu(input_dim, output_dim):
     """ Since we're using RELU activation, we'll implement the `he` initialization.
@@ -63,70 +70,6 @@ def q1():
     print(f"Shapes equal: {x.shape == y.shape}")
 
 
-class DropNormV0(nn.Module):
-    def __init__(self, drop_p=0.5):
-        super().__init__()
-        assert 0. <= drop_p <= 1., f"drop probability {drop_p} should be in between [0, 1]"
-        self.drop_p = drop_p
-        self.eps = 1e-16
-
-    def fail_dropout(self, x: torch.Tensor):
-        # Case not training or p = 0
-        if not self.training or self.drop_p == 0.:
-            return x
-
-        # Separating the batch from features ==> mask is shared across the whole batch.
-        feature_shape = x.shape[1:]
-        # Creating the mask using x.shape for randoms, and drop_p for 0/1
-        mask = (torch.rand(feature_shape, device=x.device) > self.drop_p).float()
-        # division: since we "activate" fewer neurons, we give them "more power"
-        mask = mask / (1. - self.drop_p)
-        # element wise multiplication ==> "masking"
-        return x * mask, mask
-
-    def correct_dropout(self, x: torch.Tensor):
-        # hard set of p to 0.5 like required.
-        p = 0.5
-        if not self.training:
-            return x
-        feature_shape = x.shape[1:]
-        ele_num = math.prod(feature_shape)
-        # bitwise check for `even` num
-        assert ele_num & 1 == 0
-        half_ele = ele_num // 2
-        # Creating tensor with half 1 and half 0
-        mask = torch.cat([torch.ones(half_ele, dtype=torch.float),
-                          torch.zeroes(half_ele, dtype=torch.float)])
-        # Generate random permutation (to order the 1s and 0s) <=> shuffle
-        perm = torch.randperm(ele_num, device=x.device)
-        # Shuffle the mask, reshape to original feature shape
-        mask = mask[perm].reshape(feature_shape).to(x.device)
-        return x * mask / p, mask
-
-    def normalize(self, x):
-        if not self.training:
-            return x
-
-        # We want all dims EXCEPT the batch dim, to be included in the mean
-        # meaning every batch will have it's own mew, sig2, and eventually norm_x.
-        dims = tuple(range(1, x.dim()))
-        mew = torch.mean(x, dtype=torch.float32, dim=dims, keepdim=True)
-        # std^2 | known also as `variance`
-        sig2 = torch.sum((x - mew) ** 2, dim=dims, keepdim=True) / math.prod(x.shape[1:])
-        norm_x = (x - mew) / torch.sqrt(sig2 + self.eps)
-        return norm_x
-
-    def dropout(self, x):
-        return self.correct_dropout(x)
-
-    def forward(self, x):
-        # TODO: implement gama and betas for the network
-        # TODO: Distinguish between training/infer
-        out1 = self.dropout(x)
-        out2 = self.normalize(out1)
-        return out2
-
-
 class DropNorm(nn.Module):
     def __init__(self, input_dim: Union[tuple, list, int]):
         super().__init__()
@@ -155,9 +98,6 @@ class DropNorm(nn.Module):
         return x * mask / p, mask
 
     def normalize(self, x):
-        if not self.training:
-            return x
-
         # We want all dims EXCEPT the batch dim, to be included in the mean
         # meaning every sample will have its own mew, sig2, and eventually norm_x.
         dims = tuple(range(1, x.dim()))
@@ -181,10 +121,83 @@ class DropNorm(nn.Module):
         return out2
 
 
+class BasicNetwork(nn.Module):
+    def __init__(self, input_shape=(1, 28, 28), num_classes=10):
+        """ 28 => 14 => 7 """
+        super().__init__()
+        c, h, w = input_shape
+        self.input_shape = input_shape
+        self.backbone = nn.Sequential(
+            nn.Conv2d(c, 32, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.5),
+            nn.LayerNorm([32, h // 2, w // 2]),
+
+            nn.Conv2d(32, 64, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.5),
+            nn.LayerNorm([64, h // 4, w // 4]),
+
+            nn.Conv2d(64, 128, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.LayerNorm([128, h // 4, w // 4]),
+        )
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear((h // 4) * (w // 4) * 128, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.LayerNorm(256),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = self.classifier(x)
+        return x
+
+
+class MySpecialNetwork(nn.Module):
+    def __init__(self, input_shape=(1, 28, 28), num_classes=10):
+        """ 28 => 14 => 7 """
+        super().__init__()
+        c, h, w = input_shape
+        self.input_shape = input_shape
+        self.backbone = nn.Sequential(
+            nn.Conv2d(c, 32, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            DropNorm([32, h // 2, w // 2]),
+
+            nn.Conv2d(32, 64, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            DropNorm([64, h // 4, w // 4]),
+
+            nn.Conv2d(64, 128, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            DropNorm([128, h // 4, w // 4]),
+        )
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear((h // 4) * (w // 4) * 128, 256),
+            nn.ReLU(),
+            DropNorm(256),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = self.classifier(x)
+        return x
+
+
 def norm_example():
     x = torch.arange(0, 3 * 10 * 10).reshape(3, 10, 10)
     print(x)
-
     # We want all dims EXCEPT the batch dim, to be included in the mean
     dims = tuple(range(1, x.dim()))
     mew = torch.mean(x, dtype=torch.float32, dim=dims, keepdim=True)
@@ -195,8 +208,97 @@ def norm_example():
     print(norm_x)
 
 
+def validation_loop(model, val_loader, loss_fn) -> (float, float):
+    """ validation loop """
+    val_loss = 0.
+    metric = metrics.MulticlassAccuracy(device=DEVICE)
+    model.eval()
+    with torch.no_grad():
+        for x, y in val_loader:
+            x, y = x.to(DEVICE), y.to(DEVICE)
+            preds = model(x)
+            loss = loss_fn(preds, y)
+            metric.update(preds, y)
+            val_loss += loss.item()
+
+    avg_val_loss = val_loss / len(val_loader)
+    return avg_val_loss, metric.compute()
+
+
+def train_model(
+        model: nn.Module,
+        train_loader: DataLoader,
+        valid_loader: DataLoader,
+        loss_fn: nn.Module,
+        epochs: int = 10,
+        verbose: int = 1,
+        verbose_batch: int = 1,
+        lr: float = 1e-4,
+        wd: float = 0.05) -> nn.Module:
+    """
+    Given train/validation set, train the model `epochs` epochs, and validates at each epoch over
+    the validation set.
+    Required metric is Accuracy.
+
+    :param model:
+    :param train_loader:
+    :param valid_loader:
+    :param task: Task (currently 'classification' or 'regression')
+    :param epochs:
+    :param verbose: [0, 1, 2] Level of printing information (0 None, 2 Max)
+    :param verbose_batch: if verbose is 2, how many batches before printing metrices and loss.
+    :param lr: learning rate
+    :param wd: weight decay
+    :return: a model
+    """
+    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+    metric = metrics.MulticlassAccuracy(device=DEVICE)
+    for epoch in range(epochs):
+        running_loss = 0.
+        model.train()
+        metric.reset()
+        for i, (x, y) in enumerate(train_loader):
+            x, y = x.to(DEVICE), y.to(DEVICE)
+            opt.zero_grad()
+            preds = model(x)
+            loss = loss_fn(preds, y)
+            metric.update(preds, y)
+            loss.backward()
+            opt.step()
+            running_loss += loss.item()
+
+            # Print every `verbose_batch` batches
+            if verbose >= 2 and i % verbose_batch == 0:
+                print(f"Epoch [{epoch + 1}/{epochs}], "
+                      f"Step [{i}/{len(train_loader)}], "
+                      f"Loss: {loss.item():.4f}", sep=',')
+
+        # End of epoch. Run validation and print outcomes
+        avg_val_loss, metric_val = validation_loop(model, valid_loader, loss_fn)
+        if verbose >= 1:
+            print(f"Epoch [{epoch + 1:4}/{epochs}]", end=f", ")
+            print(f"trn los: {running_loss / len(train_loader):8.4f},", f"trn acc: {metric.compute():6.4f}",
+                  end=', ')
+            print(f"val loss: {avg_val_loss:8.4f}, val acc: {metric_val:6.4f}")
+
+    return model
+
+
 def main():
-    pass
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))  # mean and std from MNIST stats
+    ])
+    train_data = datasets.MNIST('../MNIST_data', download=True, train=True, transform=transform)
+    test_data = datasets.MNIST('../MNIST_data', download=True, train=False, transform=transform)
+
+    train_loader = DataLoader(train_data, batch_size=50, shuffle=True)
+    test_loader = DataLoader(test_data, batch_size=100)
+
+    model = MySpecialNetwork().to(DEVICE)
+
+    loss_fn = nn.CrossEntropyLoss()
+    train_model(model, train_loader, test_loader, loss_fn, verbose=2, verbose_batch=100)
 
 
 if __name__ == '__main__':

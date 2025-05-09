@@ -46,6 +46,46 @@ class BasicNetwork(nn.Module):
         x = self.classifier(x)
         return x
 
+class MySpecialNetwork(nn.Module):
+    def __init__(self, input_shape=(1, 28, 28), num_classes=10):
+        """ 28 => 14 => 7 """
+        super().__init__()
+        c, h, w = input_shape
+        self.input_shape = input_shape
+        self.backbone = nn.Sequential(
+            nn.Conv2d(c, 32, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.LayerNorm([32, h // 2, w // 2]),
+            nn.Dropout(0.5),
+
+            nn.Conv2d(32, 64, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.LayerNorm([64, h // 4, w // 4]),
+            nn.Dropout(0.5),
+
+            nn.Conv2d(64, 128, 3, stride=1, padding='same'),
+            nn.ReLU(),
+            #nn.MaxPool2d(2, 2),
+            nn.LayerNorm([128, h // 4, w // 4]),
+            nn.Dropout(0.5),
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear((h // 4) * (w // 4) * 128, 256),
+            nn.ReLU(),
+            nn.LayerNorm(256),
+            nn.Dropout(0.5),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = self.classifier(x)
+        return x
+
 
 
 def main():
