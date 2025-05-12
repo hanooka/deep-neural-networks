@@ -1,19 +1,35 @@
+import math
+
 import torch
+from keras.src.backend import dtype
 from torch import nn
 
 
+def init_conv_he_normal(shape):
+    """ Expecting input shape, of len 4. (conv2d input)
+    Very similar to maman14 """
+    assert len(shape) == 4
+    fan_in = shape[1] * shape[2] * shape[3]
+    std = math.sqrt(2. / fan_in)
+    return torch.randn(shape) * std
+
+
 def pad(x: torch.Tensor, padding: int):
+    """ Pads x symmetrically with zeroes along height and width. """
+    # We're taking x shape (B, C, H, W)
+    # We then create zeros along b, c, `padding` times, along w
     b, c, h, w = x.shape
     x = torch.cat([
-        torch.zeros(size=(b, c, padding, 1)),
+        torch.zeros(size=(b, c, padding, w), dtype=x.dtype, device=x.device),
         x,
-        torch.zeros(size=(b, c, padding, 1))
+        torch.zeros(size=(b, c, padding, w), dtype=x.dtype, device=x.device)
     ], dim=2)
+    # Same, along h
     b, c, h, w = x.shape
     x = torch.cat([
-        torch.zeros(size=(b, c, 1, padding)),
+        torch.zeros(size=(b, c, h, padding), dtype=x.dtype, device=x.device),
         x,
-        torch.zeros(size=(b, c, 1, padding))
+        torch.zeros(size=(b, c, h, padding), dtype=x.dtype, device=x.device)
     ], dim=3)
     return x
 
@@ -42,10 +58,10 @@ class myConv2d(nn.Module):
         self.padding = padding
         # Imagine (in_channels, *kernel_size) as a 3d cube, striding over the input.
         # Do that out_channels times to get the output
-        self.kernel = nn.Parameter(torch.randn(
+        self.kernel = nn.Parameter(init_conv_he_normal(
             (out_channels, in_channels, *kernel_size)
         ))
-        self.bias = nn.Parameter(torch.randn((1, out_channels)))
+        self.bias = nn.Parameter(torch.zeros((1, out_channels)))
 
     def forward(self, x: torch.Tensor):
         # We know the input should be 4 dims (Batch, C, H, W)
@@ -57,10 +73,14 @@ class myConv2d(nn.Module):
         output_w = 1 + (ow - self.kw + self.padding * 2) // self.stride
         # Since we use for loops (task constraint) We will initialize memory for our output
         output = torch.empty(
-            bs,
-            self.out_channels,
-            output_h,
-            output_w
+            (
+                bs,
+                self.out_channels,
+                output_h,
+                output_w
+            ),
+            dtype=x.dtype,
+            device=x.device
         )
         if self.padding > 0:
             x = pad(x, self.padding)
@@ -76,3 +96,10 @@ class myConv2d(nn.Module):
                 # do a cartesian multiplication, which gives us the BxO result wanted, for each h and w
                 # in our new output. Final output shape: (B, O, o_h, o_w)
                 output[:, :, h, w] = torch.tensordot(sub_img, self.kernel, dims=([1, 2, 3], [1, 2, 3])) + self.bias
+        return output
+
+
+def test_pad():
+    x = torch.randn(2, 2, 2, 2)
+    padded_x = pad(x, 2)
+    print(padded_x)
