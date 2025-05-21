@@ -131,9 +131,12 @@ def get_modified_resnet18(n_classes=10, pretrained=True) -> nn.Module:
     return resnet18
 
 
-def main():
-    n_classes = 10
+
+def get_data_loaders():
+    # dataset contains PIL images. with RGB values of 0-255
+    # transforms.ToTensor transforms them from uint8 to be between [0-1] floats
     transform = transforms.Compose([
+        transforms.Resize(224), # Match freaking cifer 32x32 input to resnet18 trained weights over 224x224 images.
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225])
@@ -144,13 +147,33 @@ def main():
 
     cf10_train_dl = DataLoader(cifar10_train_ds, batch_size=BATCH_SIZE, shuffle=True)
     cf10_test_dl = DataLoader(cifar10_test_ds, batch_size=BATCH_SIZE, shuffle=False)
+    return cf10_train_dl, cf10_test_dl
 
-    resnet18 = get_modified_resnet18(n_classes=10, pretrained=True)
+
+def load_model_from_disk(path, *args, **kwargs):
+    model = get_modified_resnet18(*args, **kwargs)
+    model.load_state_dict(torch.load(path, weights_only=True))
+    model.to(DEVICE)
+    return model
+
+
+def analyze_mistakes():
+    n_classes = 10
+    model = load_model_from_disk('../assets/weights_1.pt', n_classes=n_classes, pretrained=True)
+    _, cf10_test_dl = get_data_loaders()
+
+def train_resnet18_toplayer():
+    n_classes = 10
+
+    cf10_train_dl, cf10_test_dl = get_data_loaders()
+
+    resnet18 = get_modified_resnet18(n_classes=n_classes, pretrained=True)
     resnet18.to(DEVICE)
-
     loss_fn = nn.CrossEntropyLoss()
-    train_model(resnet18, cf10_train_dl, cf10_test_dl, loss_fn, epochs=10, verbose=2, verbose_batch=100, lr=1e-4, wd=0.)
+    model = train_model(resnet18, cf10_train_dl, cf10_test_dl, loss_fn, epochs=3, verbose=2, verbose_batch=100, lr=1e-4, wd=0.)
+    torch.save(model.state_dict(), '../assets/weights_1.pt')
+
 
 
 if __name__ == '__main__':
-    main()
+    analyze_mistakes()
