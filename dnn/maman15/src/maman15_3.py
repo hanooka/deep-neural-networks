@@ -2,12 +2,31 @@ import torch
 from torch import nn
 
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 from torcheval import metrics
 
 BATCH_SIZE = 16
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+class MyResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, down_sample=False):
+        super().__init__()
+        _stride = (2, 2) if down_sample else (1, 1)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=(3, 3), stride=_stride, padding='same',
+                               bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels, affine=True)
+
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=(3, 3), stride=(1, 1), padding='same',
+                               bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels, affine=True)
+
+
+class MyMiniResNet(nn.Module):
+    def __init__(self):
+        super().__init__()
 
 
 def show_images_per_class(dataloader, class_names, n_per_class=5):
@@ -131,12 +150,20 @@ def get_modified_resnet18(n_classes=10, pretrained=True) -> nn.Module:
     return resnet18
 
 
+def reverse_transform(img_tensor):
+    """reverse original transformation"""
+    mean = [0.485, 0.456, 0.406],
+    std = [0.229, 0.224, 0.225]
+    mean = torch.tensor(mean).view(-1, 1, 1)
+    std = torch.tensor(std).view(-1, 1, 1)
+    return img_tensor * std + mean
 
-def get_data_loaders():
+
+def get_data_sets_and_loaders():
     # dataset contains PIL images. with RGB values of 0-255
     # transforms.ToTensor transforms them from uint8 to be between [0-1] floats
     transform = transforms.Compose([
-        transforms.Resize(224), # Match freaking cifer 32x32 input to resnet18 trained weights over 224x224 images.
+        transforms.Resize(224),  # Match freaking cifer 32x32 input to resnet18 trained weights over 224x224 images.
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225])
@@ -147,7 +174,7 @@ def get_data_loaders():
 
     cf10_train_dl = DataLoader(cifar10_train_ds, batch_size=BATCH_SIZE, shuffle=True)
     cf10_test_dl = DataLoader(cifar10_test_ds, batch_size=BATCH_SIZE, shuffle=False)
-    return cf10_train_dl, cf10_test_dl
+    return cifar10_train_ds, cifar10_test_ds, cf10_train_dl, cf10_test_dl
 
 
 def load_model_from_disk(path, *args, **kwargs):
@@ -157,23 +184,89 @@ def load_model_from_disk(path, *args, **kwargs):
     return model
 
 
-def analyze_mistakes():
-    n_classes = 10
+def analyze_mistakes(top_k=10):
+    _, cf10_test_ds, _, cf10_test_dl = get_data_sets_and_loaders()
+    n_classes = len(cf10_test_ds.classes)
+
     model = load_model_from_disk('../assets/weights_1.pt', n_classes=n_classes, pretrained=True)
-    _, cf10_test_dl = get_data_loaders()
+    # TODO Remove
+    print(model)
+    quit()
+
+    mistakes = get_mistakes(model, cf10_test_dl)
+    print(mistakes[:top_k])
+    show_mistakes(mistakes[:top_k], cf10_test_ds.classes)
+
+
+def get_mistakes(model, data_loader):
+    mistakes = []
+    model.eval()
+    with torch.no_grad():
+        for x, y in data_loader:
+            x, y = x.to(DEVICE), y.to(DEVICE)
+            # getting the fully connected 10 dim output from model
+            logits = model(x)
+            # softmax over the feature dim (not batch) giving us
+            # len(row) = 10, sum(row) = 1
+            probs = F.softmax(logits, dim=1)
+            # torch max returns (max prob, indices)
+            # indices can be converted to original class and be compared to gt_label (gt = ground truth)
+            pred_confidence, preds = torch.max(probs, dim=1)
+
+            for i in range(len(y)):
+                gt = y[i].item()
+                pred = preds[i].item()
+                confidence = pred_confidence[i].item()
+                if pred != gt:
+                    mistakes.append({
+                        'image': x[i].cpu(),
+                        'true_label': gt,
+                        'pred_label': pred,
+                        'confidence': confidence
+                    })
+    mistakes = sorted(mistakes, key=lambda m: m['confidence'], reverse=True)
+    return mistakes
+
+
+def show_mistakes(mistakes, class_names):
+    n = len(mistakes)
+    fig, axs = plt.subplots(n, 2, figsize=(10, 4 * n))
+
+    for i, mistake in enumerate(mistakes):
+        img = reverse_transform(mistake['image'])
+        # premute: convert CHW → HWC,
+        # clamp. cuts negatives to 0 and x > 1 to 1.
+        # no need to go back to 0-255 since matplotlib imshow can handle it
+        img = img.permute(1, 2, 0).clamp(0, 1).numpy()
+
+        axs[i][0].imshow(img)
+        axs[i][0].axis('off')
+        # Show text on right
+        text = (
+            f"True Label: {class_names[mistake['true_label']]}\n"
+            f"Predicted: {class_names[mistake['pred_label']]}\n"
+            f"Confidence: {mistake['confidence']:.2f}"
+        )
+        axs[i][1].text(0.0, 0.5, text, fontsize=26, va='center', fontfamily='monospace')
+        axs[i][1].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
 
 def train_resnet18_toplayer():
     n_classes = 10
 
-    cf10_train_dl, cf10_test_dl = get_data_loaders()
+    _, _, cf10_train_dl, cf10_test_dl = get_data_sets_and_loaders()
 
     resnet18 = get_modified_resnet18(n_classes=n_classes, pretrained=True)
     resnet18.to(DEVICE)
     loss_fn = nn.CrossEntropyLoss()
-    model = train_model(resnet18, cf10_train_dl, cf10_test_dl, loss_fn, epochs=3, verbose=2, verbose_batch=100, lr=1e-4, wd=0.)
+    model = train_model(resnet18, cf10_train_dl, cf10_test_dl, loss_fn, epochs=3, verbose=2, verbose_batch=100, lr=1e-4,
+                        wd=0.)
     torch.save(model.state_dict(), '../assets/weights_1.pt')
 
 
-
 if __name__ == '__main__':
-    analyze_mistakes()
+    # train_resnet18_toplayer()
+    mistakes = analyze_mistakes()
