@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 import torch
 from torch import nn
 
@@ -12,21 +14,71 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class MyResidualBlock(nn.Module):
+    """ Designing the residual block with additional parameter, down_sample.
+    Which decides if our residual block will stride 2 steps instead of 1
+    Which in terms shrink H and W. by factor of 2. """
+
     def __init__(self, in_channels, out_channels, down_sample=False):
         super().__init__()
-        _stride = (2, 2) if down_sample else (1, 1)
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=(3, 3), stride=_stride, padding='same',
-                               bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels, affine=True)
+        _stride = 2 if down_sample else 1
 
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=(3, 3), stride=(1, 1), padding='same',
-                               bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels, affine=True)
+        # the conv path constructed from 2 conv with batch_norm, and relu in the first pass
+        self.conv_layer = nn.Sequential(OrderedDict([
+            ("conv1", nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=_stride, padding=1, bias=False)),
+            ("bn1", nn.BatchNorm2d(out_channels, affine=True)),
+            ("relu1", nn.ReLU(inplace=True)),
+            ("conv2", nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)),
+            ("bn2", nn.BatchNorm2d(out_channels, affine=True))
+        ]))
+
+        # skip path, in case we down sample or channels do not align, we align them.
+        # otherwise we simply use identity.
+        if down_sample or in_channels != out_channels:
+            self.skip_layer = nn.Sequential(OrderedDict([
+                ("conv_skip",
+                 nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=_stride, padding=1, bias=False)),
+                ("bn_skip", nn.BatchNorm2d(out_channels, affine=True)),
+            ]))
+        else:
+            self.skip_layer = nn.Identity()
+
+    def forward(self, x: torch.Tensor):
+        conv = self.conv_layer(x)
+        skip = self.skip_layer(x)
+        return F.relu(conv + skip)
 
 
 class MyMiniResNet(nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels=3, num_classes=10):
         super().__init__()
+
+        # this mini resnet attacks the cifar10 dataset, so no max pool. use small kernel size.
+        self.stem = nn.Sequential(OrderedDict([
+            ("conv_stem", nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)),
+            ("bn_stem", nn.BatchNorm2d(64)),
+            ('relu_stem', nn.ReLU(inplace=True))
+        ]))
+
+        # for cifar10
+        # 32x32 -> 32x32 -> 16x16 -> 8x8 (x256)
+        self.block1 = MyResidualBlock(64, 64, down_sample=False)
+        self.block2 = MyResidualBlock(64, 128, down_sample=True)
+        self.block3 = MyResidualBlock(128, 256, down_sample=True)
+
+        # 8x8x256 avg pool -> 256x1x1, flatten -> 256 -> 10
+        self.head = nn.Sequential(OrderedDict([
+            ("ada_avg_pool", nn.AdaptiveAvgPool2d((1, 1))),
+            ("flatten", nn.Flatten()),
+            ('fc', nn.Linear(256, num_classes))
+        ]))
+
+    def forward(self, x: torch.Tensor):
+        x = self.stem(x)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.head(x)
+        return x
 
 
 def show_images_per_class(dataloader, class_names, n_per_class=5):
@@ -137,7 +189,6 @@ def get_modified_resnet18(n_classes=10, pretrained=True) -> nn.Module:
     if pretrained:
         weights = models.ResNet18_Weights.IMAGENET1K_V1
     resnet18 = models.resnet18(weights=weights)
-
     # Overwriting resnet18 output layer
     resnet18.fc = nn.Linear(in_features=resnet18.fc.in_features, out_features=n_classes, bias=True, device=DEVICE)
 
@@ -159,11 +210,11 @@ def reverse_transform(img_tensor):
     return img_tensor * std + mean
 
 
-def get_data_sets_and_loaders():
+def get_data_sets_and_loaders(resize=224):
     # dataset contains PIL images. with RGB values of 0-255
     # transforms.ToTensor transforms them from uint8 to be between [0-1] floats
     transform = transforms.Compose([
-        transforms.Resize(224),  # Match freaking cifer 32x32 input to resnet18 trained weights over 224x224 images.
+        transforms.Resize(resize),  # Match freaking cifer 32x32 input to resnet18 trained weights over 224x224 images.
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225])
@@ -213,6 +264,7 @@ def get_mistakes(model, data_loader):
             # indices can be converted to original class and be compared to gt_label (gt = ground truth)
             pred_confidence, preds = torch.max(probs, dim=1)
 
+            # Building the mistakes array. inserting only pred != gt ..
             for i in range(len(y)):
                 gt = y[i].item()
                 pred = preds[i].item()
@@ -262,11 +314,25 @@ def train_resnet18_toplayer():
     resnet18 = get_modified_resnet18(n_classes=n_classes, pretrained=True)
     resnet18.to(DEVICE)
     loss_fn = nn.CrossEntropyLoss()
-    model = train_model(resnet18, cf10_train_dl, cf10_test_dl, loss_fn, epochs=3, verbose=2, verbose_batch=100, lr=1e-4,
-                        wd=0.)
+    model = train_model(resnet18, cf10_train_dl, cf10_test_dl, loss_fn,
+                        epochs=3, verbose=2, verbose_batch=100, lr=1e-4, wd=0.)
     torch.save(model.state_dict(), '../assets/weights_1.pt')
+
+
+def train_custom_resnet():
+    n_classes = 10
+    _, _, cf10_train_dl, cf10_test_dl = get_data_sets_and_loaders(resize=32)
+    my_resnet = MyMiniResNet(3, n_classes)
+    my_resnet.to(DEVICE)
+    loss_fn = nn.CrossEntropyLoss()
+    model = train_model(my_resnet, cf10_train_dl, cf10_test_dl, loss_fn,
+                        epochs=3, verbose=2, verbose_batch=100, lr=1e-4, wd=0.)
+    torch.save(model.state_dict(), '../assets/weights_2.pt')
+    return model
 
 
 if __name__ == '__main__':
     # train_resnet18_toplayer()
-    mistakes = analyze_mistakes()
+    # mistakes = analyze_mistakes()
+    print(DEVICE)
+    train_custom_resnet()
