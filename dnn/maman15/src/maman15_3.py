@@ -235,17 +235,14 @@ def load_model_from_disk(path, *args, **kwargs):
     return model
 
 
-def analyze_mistakes(top_k=10):
+def analyze_mistakes(top_k=10, model=None):
     _, cf10_test_ds, _, cf10_test_dl = get_data_sets_and_loaders()
     n_classes = len(cf10_test_ds.classes)
 
-    model = load_model_from_disk('../assets/weights_1.pt', n_classes=n_classes, pretrained=True)
-    # TODO Remove
-    print(model)
-    quit()
+    if not model:
+        model = load_model_from_disk('../assets/weights_1.pt', n_classes=n_classes, pretrained=True)
 
     mistakes = get_mistakes(model, cf10_test_dl)
-    print(mistakes[:top_k])
     show_mistakes(mistakes[:top_k], cf10_test_ds.classes)
 
 

@@ -97,9 +97,3 @@ class myConv2d(nn.Module):
                 # in our new output. Final output shape: (B, O, o_h, o_w)
                 output[:, :, h, w] = torch.tensordot(sub_img, self.kernel, dims=([1, 2, 3], [1, 2, 3])) + self.bias
         return output
-
-
-def test_pad():
-    x = torch.randn(2, 2, 2, 2)
-    padded_x = pad(x, 2)
-    print(padded_x)
